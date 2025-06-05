@@ -4,6 +4,9 @@ import random
 import tempfile
 import subprocess
 from datetime import datetime, timedelta
+import zipfile
+import shutil
+import re
 
 from dotenv import load_dotenv
 from docx import Document
@@ -36,28 +39,33 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # === Функция подстановки значений в Word (python-docx) и конвертации в PDF (docx2pdf) ===
 def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
     """
-    Здесь оставляем логику замены в XML полностью без изменений.
-    Но вместо жёстко заданного output_docx мы получаем временный путь,
-    а PDF тоже создаём во временной директории. Возвращаем кортеж:
-        (путь_к_временному_docx, путь_к_временному_pdf)
+    1) Распаковывает input_docx во временную папку.
+    2) Проходит по всем XML‐файлам внутри word/ (document.xml, header*.xml, drawing*.xml и т.д.)
+       и ищет любые вариации {{…KEY…}}, допуская XML-теги между символами, затем заменяет на data[KEY].
+    3) Собирает из изменённой временной папки новый output_docx (.docx).
+    4) Конвертирует output_docx → output_pdf с помощью LibreOffice CLI.
+    5) Возвращает кортеж (output_docx, output_pdf).
     """
-    import zipfile, tempfile, shutil, os, re, logging
-    from docx2pdf import convert
-
-    # Если output_docx уже существует — удаляем (на случай, если кто-то всё же передал постоянный)
+    # Если на диске уже существуют файлы с такими именами, удаляем их
     try:
         if os.path.exists(output_docx):
             os.remove(output_docx)
-    except:
+    except Exception:
+        pass
+    output_pdf = os.path.splitext(output_docx)[0] + ".pdf"
+    try:
+        if os.path.exists(output_pdf):
+            os.remove(output_pdf)
+    except Exception:
         pass
 
-    # 1) Распаковать .docx во временную папку
+    # 1) Распаковать .docx (zip) во временную папку
     tempdir = tempfile.mkdtemp()
     try:
         with zipfile.ZipFile(input_docx, 'r') as zin:
             zin.extractall(tempdir)
 
-        # 2) Пробегаем по всем XML в word/ и делаем re.sub, как раньше
+        # 2) Обойти все XML-файлы внутри word/ и выполнить замену
         word_dir = os.path.join(tempdir, 'word')
         for root, _, files in os.walk(word_dir):
             for fname in files:
@@ -67,24 +75,30 @@ def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
                 try:
                     with open(xml_path, 'r', encoding='utf-8') as f:
                         xml = f.read()
-                except:
+                except Exception:
+                    # Пропустить файлы, не читающиеся как UTF-8
                     continue
 
                 new_xml = xml
                 for key, value in data.items():
                     escaped = re.escape(key)
-                    # паттерны pattern_double и pattern_single (как мы уже делали)
+                    # Шаблон для строгого {{KEY}}
                     pattern_double = (
-                        r"\{\{\s*(?:<\/?[^>]+>)*\s*"
-                        + escaped +
-                        r"\s*(?:<\/?[^>]+>)*\s*\}\}"
+                        r"\{\{\s*"                       # '{{' + пробелы
+                        r"(?:<\/?[^>]+>)*\s*"            # XML-теги <…> + пробелы
+                        + escaped +                      # сам ключ
+                        r"\s*(?:<\/?[^>]+>)*\s*"         # XML-теги + пробелы
+                        r"\}\}"                          # '}}'
                     )
                     new_xml = re.sub(pattern_double, str(value), new_xml, flags=re.IGNORECASE)
 
+                    # Шаблон для случая {KEY}} (одна открывающая скобка)
                     pattern_single = (
-                        r"\{\s*(?:<\/?[^>]+>)*\s*"
-                        + escaped +
-                        r"\s*(?:<\/?[^>]+>)*\s*\}\}"
+                        r"\{\s*"                         # '{' + пробелы
+                        r"(?:<\/?[^>]+>)*\s*"            # XML-теги + пробелы
+                        + escaped +                      # сам ключ
+                        r"\s*(?:<\/?[^>]+>)*\s*"         # XML-теги + пробелы
+                        r"\}\}"                          # '}}'
                     )
                     new_xml = re.sub(pattern_single, str(value), new_xml, flags=re.IGNORECASE)
 
@@ -92,7 +106,7 @@ def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
                     with open(xml_path, 'w', encoding='utf-8') as f:
                         f.write(new_xml)
 
-        # 3) Запаковать изменённую временную папку снова во временный DOCX
+        # 3) Собрать обратно во .docx
         with zipfile.ZipFile(output_docx, 'w', zipfile.ZIP_DEFLATED) as zout:
             for root, _, files in os.walk(tempdir):
                 for file in files:
@@ -104,15 +118,33 @@ def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
         # Удаляем распакованную временную папку
         shutil.rmtree(tempdir)
 
-    # 4) Конвертируем только что созданный временный DOCX в PDF рядом с ним
+    # 4) Конвертировать output_docx → output_pdf через LibreOffice
     try:
-        convert(output_docx)  # появится output_docx.replace('.docx', '.pdf')
-    except Exception as e:
-        logging.error(f"Ошибка конвертации {output_docx} в PDF: {e}")
+        proc = subprocess.run(
+            [
+                "libreoffice",
+                "--headless",
+                "--convert-to", "pdf",
+                "--outdir", os.path.dirname(output_docx),
+                output_docx
+            ],
+            capture_output=True,
+            text=True
+        )
+        logging.info(f"LibreOffice stdout: {proc.stdout}")
+        logging.info(f"LibreOffice stderr: {proc.stderr}")
+
+        if proc.returncode != 0 or not os.path.exists(output_pdf):
+            msg = f"Ошибка конвертации через LibreOffice (код {proc.returncode}). Посмотрите stderr выше."
+            logging.error(msg)
+            raise RuntimeError(msg)
+
+    except FileNotFoundError:
+        msg = "Команда 'libreoffice' не найдена. Убедитесь, что LibreOffice установлен."
+        logging.error(msg)
         raise
 
-    # Возвращаем кортеж: (путь_к_temp_docx, путь_к_temp_pdf)
-    return output_docx, os.path.splitext(output_docx)[0] + ".pdf"
+    return output_docx, output_pdf
 
 
 # === Состояния ConversationHandler ===
