@@ -1,12 +1,12 @@
 import os
 import logging
 import random
-import tempfile                # ← добавлено
+import tempfile
+import subprocess
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from docx import Document
-from docx2pdf import convert
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
@@ -17,20 +17,21 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-# ======== Загрузка токена из .env ========
+# ======== Загрузка переменных из .env ========
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("Переменная BOT_TOKEN не найдена в окружении. Проверьте файл .env")
 
-# === Настройка логирования ===
+# ======== Настройка логирования ========
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# === Директория скрипта ===
+# ======== Директория скрипта (для шаблонов .docx) ========
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 # === Функция подстановки значений в Word (python-docx) и конвертации в PDF (docx2pdf) ===
 def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
@@ -286,24 +287,26 @@ async def mdo_carbon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def mdo_sulph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # Получаем значение SULPH от пользователя
     context.user_data["SULPH"] = update.message.text.strip().upper()
+    # Случайные значения для ASH и CETANE
     context.user_data["ASH"] = f"{random.uniform(0.001, 0.011):.3f}"
     context.user_data["CETANE"] = f"{random.uniform(42.0, 62.0):.1f}"
 
     await update.message.reply_text("Генерируется документ MDO и конвертируется в PDF…")
 
-    # Собираем данные и создаём временный output_docx
+    # Собираем все данные для подстановки
     data = {k.upper(): v for k, v in context.user_data.items()}
     tmpl_docx = os.path.join(SCRIPT_DIR, "MDO.docx")
 
-    # 1) Временный .docx
+    # 1) Создаём временный файл .docx
     tf = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
     out_docx = tf.name
     tf.close()
 
-    # 2) Заполняем шаблон и конвертируем
+    # 2) Заполняем шаблон и конвертируем в PDF
     try:
-        out_docx_path, out_pdf_path = fill_docx_and_convert(tmpl_docx, out_docx, data)
+        tmp_docx, tmp_pdf = fill_docx_and_convert(tmpl_docx, out_docx, data)
     except Exception as e:
         logger.error(f"Ошибка при генерации MDO PDF: {e}")
         await update.message.reply_text("Ошибка при создании документа. Попробуйте позже.")
@@ -313,24 +316,25 @@ async def mdo_sulph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             pass
         return ConversationHandler.END
 
-    # 3) Отправляем PDF, потом удаляем оба
+    # 3) Отправляем PDF пользователю
     try:
-        with open(out_pdf_path, "rb") as f:
+        with open(tmp_pdf, "rb") as f:
             await update.message.reply_document(f)
     except Exception as e:
         logger.error(f"Ошибка при отправке PDF: {e}")
         await update.message.reply_text("Не удалось отправить PDF. Попробуйте позже.")
     finally:
+        # 4) Удаляем временные файлы
         try:
-            os.remove(out_pdf_path)
+            os.remove(tmp_pdf)
         except:
             pass
         try:
-            os.remove(out_docx_path)
+            os.remove(tmp_docx)
         except:
             pass
 
-    # 4) Вопрос «ещё один PDF / завершить»
+    # 5) Спрашиваем, что делать дальше
     await update.message.reply_text(
         "Что дальше?",
         reply_markup=ReplyKeyboardMarkup(again_keyboard, one_time_keyboard=True, resize_keyboard=True)
@@ -465,53 +469,54 @@ async def hfo_carbon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def hfo_sulph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # Получаем значение SULPH от пользователя
     context.user_data["SULPH"] = update.message.text.strip().upper()
+    # Случайные значения для VANAD и SEDIM
     context.user_data["VANAD"] = str(random.randint(220, 300))
     context.user_data["SEDIM"] = f"{random.uniform(0.040, 0.088):.3f}"
 
     await update.message.reply_text("Генерируется документ HFO и конвертируется в PDF…")
 
-    # Собираем данные и создаём временный output_docx
+    # Собираем все данные для подстановки
     data = {k.upper(): v for k, v in context.user_data.items()}
     tmpl_docx = os.path.join(SCRIPT_DIR, "HFO.docx")
 
     # 1) Создаём временный файл .docx
     tf = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
     out_docx = tf.name
-    tf.close()  # закрываем дескриптор, чтобы fill_docx_and_convert смог его перезаписать
+    tf.close()
 
-    # 2) Заполняем шаблон и конвертируем во временный PDF
+    # 2) Заполняем шаблон и конвертируем в PDF
     try:
-        out_docx_path, out_pdf_path = fill_docx_and_convert(tmpl_docx, out_docx, data)
+        tmp_docx, tmp_pdf = fill_docx_and_convert(tmpl_docx, out_docx, data)
     except Exception as e:
         logger.error(f"Ошибка при генерации HFO PDF: {e}")
         await update.message.reply_text("Ошибка при создании документа. Попробуйте позже.")
-        # Если хотим очистить временный docx в случае ошибки:
         try:
             os.remove(out_docx)
         except:
             pass
         return ConversationHandler.END
 
-    # 3) Открываем временный PDF и отправляем
+    # 3) Отправляем PDF пользователю
     try:
-        with open(out_pdf_path, "rb") as f:
+        with open(tmp_pdf, "rb") as f:
             await update.message.reply_document(f)
     except Exception as e:
         logger.error(f"Ошибка при отправке PDF: {e}")
         await update.message.reply_text("Не удалось отправить PDF. Попробуйте позже.")
     finally:
-        # 4) Удаляем временные файлы независимо от успеха отправки
+        # 4) Удаляем временные файлы
         try:
-            os.remove(out_pdf_path)
+            os.remove(tmp_pdf)
         except:
             pass
         try:
-            os.remove(out_docx_path)
+            os.remove(tmp_docx)
         except:
             pass
 
-    # 5) Задаём вопрос «ещё один PDF / завершить»
+    # 5) Спрашиваем, что делать дальше
     await update.message.reply_text(
         "Что дальше?",
         reply_markup=ReplyKeyboardMarkup(again_keyboard, one_time_keyboard=True, resize_keyboard=True)
