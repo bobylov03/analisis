@@ -39,78 +39,86 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # === Функция подстановки значений в Word (python-docx) и конвертации в PDF (docx2pdf) ===
 def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
     """
-    1) Распаковывает input_docx во временную папку.
-    2) Проходит по всем XML‐файлам внутри word/ (document.xml, header*.xml, drawing*.xml и т.д.)
-       и ищет любые вариации {{…KEY…}}, допуская XML-теги между символами, затем заменяет на data[KEY].
-    3) Собирает из изменённой временной папки новый output_docx (.docx).
-    4) Конвертирует output_docx → output_pdf с помощью LibreOffice CLI.
-    5) Возвращает кортеж (output_docx, output_pdf).
+    1) Распаковывает input_docx (.docx → zip) во временную папку.
+    2) Обходит все XML-файлы внутри word/ и находит паттерны {{…KEY…}},
+       допускающие наличие между фигурными скобками и именем переменной произвольных XML-тегов.
+       Заменяет этот участок на значение data[KEY].
+    3) Собирает обратно во временный output_docx (.docx).
+    4) Запускает 'libreoffice --headless --convert-to pdf', чтобы получить output_pdf.
+    5) Возвращает (output_docx, output_pdf).
     """
-    # Если на диске уже существуют файлы с такими именами, удаляем их
+    # Удаляем старые файлы, если они существуют
     try:
         if os.path.exists(output_docx):
             os.remove(output_docx)
-    except Exception:
+    except:
         pass
     output_pdf = os.path.splitext(output_docx)[0] + ".pdf"
     try:
         if os.path.exists(output_pdf):
             os.remove(output_pdf)
-    except Exception:
+    except:
         pass
 
-    # 1) Распаковать .docx (zip) во временную папку
+    # --- 1) Распаковываем .docx в отдельную папку ---
     tempdir = tempfile.mkdtemp()
     try:
         with zipfile.ZipFile(input_docx, 'r') as zin:
             zin.extractall(tempdir)
 
-        # 2) Обойти все XML-файлы внутри word/ и выполнить замену
+        # --- 2) Внутри word/ обходим все XML и делаем поиск+замену {{KEY}} ---
         word_dir = os.path.join(tempdir, 'word')
-        for root, _, files in os.walk(word_dir):
-            for fname in files:
-                if not fname.lower().endswith('.xml'):
+        for root_folder, _, files in os.walk(word_dir):
+            for filename in files:
+                if not filename.lower().endswith('.xml'):
                     continue
-                xml_path = os.path.join(root, fname)
+                xml_path = os.path.join(root_folder, filename)
+
                 try:
                     with open(xml_path, 'r', encoding='utf-8') as f:
-                        xml = f.read()
-                except Exception:
-                    # Пропустить файлы, не читающиеся как UTF-8
+                        xml_content = f.read()
+                except:
+                    # Если файл нельзя прочитать
                     continue
 
-                new_xml = xml
+                new_content = xml_content
                 for key, value in data.items():
-                    escaped = re.escape(key)
-                    # Шаблон для строгого {{KEY}}
+                    # Экранируем ключ, чтобы не “попадать” на служебные символы regex
+                    escaped_key = re.escape(key)
+
+                    # Паттерн для точной пары {{ KEY }} с учётом возможных XML-тегов между скобками и самим именем:
+                    #   \{\{\s*(?:<\/?[^>]+>)*\s*KEY\s*(?:<\/?[^>]+>)*\s*\}\}
                     pattern_double = (
-                        r"\{\{\s*"                       # '{{' + пробелы
-                        r"(?:<\/?[^>]+>)*\s*"            # XML-теги <…> + пробелы
-                        + escaped +                      # сам ключ
-                        r"\s*(?:<\/?[^>]+>)*\s*"         # XML-теги + пробелы
-                        r"\}\}"                          # '}}'
+                        r"\{\{\s*"                            # "{{" + пробелы
+                        r"(?:<\/?[^>]+>)*\s*"                 # 0 или более XML-тегов, пробелы
+                        + escaped_key +                       # само имя KEY
+                        r"\s*(?:<\/?[^>]+>)*\s*"              # 0 или более XML-тегов, пробелы
+                        r"\}\}"                              # "}}"
                     )
-                    new_xml = re.sub(pattern_double, str(value), new_xml, flags=re.IGNORECASE)
-
-                    # Шаблон для случая {KEY}} (одна открывающая скобка)
+                    # Аналогичный паттерн для случая, если кто-то в шаблоне пишет "{ KEY }}" (одна "{")
                     pattern_single = (
-                        r"\{\s*"                         # '{' + пробелы
-                        r"(?:<\/?[^>]+>)*\s*"            # XML-теги + пробелы
-                        + escaped +                      # сам ключ
-                        r"\s*(?:<\/?[^>]+>)*\s*"         # XML-теги + пробелы
-                        r"\}\}"                          # '}}'
+                        r"\{\s*"                               # "{" + пробелы
+                        r"(?:<\/?[^>]+>)*\s*"                  # XML-теги + пробелы
+                        + escaped_key +
+                        r"\s*(?:<\/?[^>]+>)*\s*"
+                        r"\}\}"
                     )
-                    new_xml = re.sub(pattern_single, str(value), new_xml, flags=re.IGNORECASE)
 
-                if new_xml != xml:
+                    # Заменяем сразу двумя паттернами (pattern_double и pattern_single)
+                    new_content = re.sub(pattern_double, str(value), new_content, flags=re.IGNORECASE)
+                    new_content = re.sub(pattern_single, str(value), new_content, flags=re.IGNORECASE)
+
+                # Если что-то изменилось – записываем обратно
+                if new_content != xml_content:
                     with open(xml_path, 'w', encoding='utf-8') as f:
-                        f.write(new_xml)
+                        f.write(new_content)
 
-        # 3) Собрать обратно во .docx
+        # --- 3) Собираем обратно во .docx ---
         with zipfile.ZipFile(output_docx, 'w', zipfile.ZIP_DEFLATED) as zout:
-            for root, _, files in os.walk(tempdir):
+            for root_folder, _, files in os.walk(tempdir):
                 for file in files:
-                    fullpath = os.path.join(root, file)
+                    fullpath = os.path.join(root_folder, file)
+                    # получаем путь относительно tempdir, чтобы сохранить правильную структуру
                     relpath = os.path.relpath(fullpath, tempdir)
                     zout.write(fullpath, relpath)
 
@@ -118,7 +126,7 @@ def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
         # Удаляем распакованную временную папку
         shutil.rmtree(tempdir)
 
-    # 4) Конвертировать output_docx → output_pdf через LibreOffice
+    # --- 4) Конвертируем .docx → .pdf через LibreOffice ---
     try:
         proc = subprocess.run(
             [
@@ -140,10 +148,11 @@ def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
             raise RuntimeError(msg)
 
     except FileNotFoundError:
-        msg = "Команда 'libreoffice' не найдена. Убедитесь, что LibreOffice установлен."
+        msg = "Команда 'libreoffice' не найдена в системе. Убедитесь, что LibreOffice установлен."
         logging.error(msg)
         raise
 
+    # --- 5) Возвращаем имена временных файлов ---
     return output_docx, output_pdf
 
 
