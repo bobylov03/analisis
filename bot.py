@@ -331,7 +331,8 @@ async def mdo_pour(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         pv = float(raw)
         context.user_data["POUR"] = raw.upper()
-        context.user_data["CLOUD"] = f"{pv - 2:.1f}"
+        # Теперь Cloud = Pour + 2
+        context.user_data["CLOUD"] = f"{pv + 2:.1f}"
     except ValueError:
         await update.message.reply_text("Нужно число, пример: 10.5")
         return MDO_POUR
