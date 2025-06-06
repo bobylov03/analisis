@@ -23,8 +23,12 @@ from telegram.ext import (
 # ======== Загрузка переменных из .env ========
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_PASSWORD = os.getenv("BOT_PASSWORD")  # ← новый параметр
+
 if not BOT_TOKEN:
     raise RuntimeError("Переменная BOT_TOKEN не найдена в окружении. Проверьте файл .env")
+if not BOT_PASSWORD:
+    raise RuntimeError("Переменная BOT_PASSWORD не найдена в окружении. Пропишите пароль в .env через BOT_PASSWORD")
 
 # ======== Настройка логирования ========
 logging.basicConfig(
@@ -35,6 +39,53 @@ logger = logging.getLogger(__name__)
 
 # ======== Директория скрипта (для шаблонов .docx) ========
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# === Новое: состояния ConversationHandler ===
+(
+    PASSWORD,           # 0 — после /start бот запрашивает пароль
+    CHOOSE_FUEL,        # 1
+
+    # MDO states (2..14)
+    MDO_NAME,           # 2
+    MDO_DATE,           # 3
+    MDO_DATE_RECEIVED,  # 4
+    MDO_LOCATION,       # 5
+    MDO_SEAL,           # 6
+    MDO_NUMBER,         # 7
+    MDO_BARGE,          # 8
+    MDO_DENS,           # 9
+    MDO_VISC,           # 10
+    MDO_FLASH,          # 11
+    MDO_POUR,           # 12
+    MDO_CARBON,         # 13
+    MDO_SULPH,          # 14
+
+    # HFO states (15..28)
+    HFO_CHOOSE_TYPE,    # 15
+    HFO_NAME,           # 16
+    HFO_DATE,           # 17
+    HFO_DATE_RECEIVED,  # 18
+    HFO_LOCATION,       # 19
+    HFO_SEAL,           # 20
+    HFO_NUMBER,         # 21
+    HFO_BARGE,          # 22
+    HFO_DENS,           # 23
+    HFO_VISC,           # 24
+    HFO_FLASH,          # 25
+    HFO_POUR,           # 26
+    HFO_CARBON,         # 27
+    HFO_SULPH,          # 28
+
+    ASK_AGAIN           # 29
+) = range(30)
+
+
+# === Клавиатуры ===
+fuel_keyboard = [[KeyboardButton("HFO"), KeyboardButton("MDO")]]
+again_keyboard = [
+    [KeyboardButton("Сделать ещё один PDF"), KeyboardButton("Завершить работу")]]
+hfo_type_keyboard = [[KeyboardButton("LSFO RMG-180"), KeyboardButton("LSFO RMG-380")]]
+
 
 # === Функция подстановки значений в Word (python-docx) и конвертации в PDF (docx2pdf) ===
 def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
@@ -104,7 +155,6 @@ def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
                         r"\}\}"
                     )
 
-
                     # Заменяем сразу двумя паттернами (pattern_double и pattern_single)
                     new_content = re.sub(pattern_double, str(value), new_content, flags=re.IGNORECASE)
                     new_content = re.sub(pattern_single, str(value), new_content, flags=re.IGNORECASE)
@@ -157,70 +207,38 @@ def fill_docx_and_convert(input_docx: str, output_docx: str, data: dict):
     return output_docx, output_pdf
 
 
-# === Состояния ConversationHandler ===
-(
-    CHOOSE_FUEL,        # 0
-
-    # MDO states (1..13)
-    MDO_NAME,           # 1
-    MDO_DATE,           # 2
-    MDO_DATE_RECEIVED,  # 3
-    MDO_LOCATION,       # 4
-    MDO_SEAL,           # 5
-    MDO_NUMBER,         # 6
-    MDO_BARGE,          # 7
-    MDO_DENS,           # 8
-    MDO_VISC,           # 9
-    MDO_FLASH,          # 10
-    MDO_POUR,           # 11
-    MDO_CARBON,         # 12
-    MDO_SULPH,          # 13
-
-    # HFO states (14..27)
-    HFO_CHOOSE_TYPE,    # 14
-    HFO_NAME,           # 15
-    HFO_DATE,           # 16
-    HFO_DATE_RECEIVED,  # 17
-    HFO_LOCATION,       # 18
-    HFO_SEAL,           # 19
-    HFO_NUMBER,         # 20
-    HFO_BARGE,          # 21
-    HFO_DENS,           # 22
-    HFO_VISC,           # 23
-    HFO_FLASH,          # 24
-    HFO_POUR,           # 25
-    HFO_CARBON,         # 26
-    HFO_SULPH,
-    ASK_AGAIN    
-) = range(29)
-
-
-# === Клавиатуры ===
-fuel_keyboard = [[KeyboardButton("HFO"), KeyboardButton("MDO")]]
-again_keyboard = [
-    [KeyboardButton("Сделать ещё один PDF"), KeyboardButton("Завершить работу")]]
-hfo_type_keyboard = [[KeyboardButton("LSFO RMG-180"), KeyboardButton("LSFO RMG-380")]]
-
-
 # === Обработчики ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    /start — предлагаем выбрать HFO или MDO.
+    /start — запрашивает пароль и переходит в состояние PASSWORD.
     """
-    await update.message.reply_text(
-        "Выберите тип топлива для заполнения анализов:",
-        reply_markup=ReplyKeyboardMarkup(fuel_keyboard, one_time_keyboard=True, resize_keyboard=True),
-    )
-    return CHOOSE_FUEL
+    await update.message.reply_text("Введите пароль:")
+    return PASSWORD
+
+
+async def check_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Проверяем введённый пароль. Если совпадает с BOT_PASSWORD, переходим к выбору топлива.
+    Иначе просим ввести пароль снова.
+    """
+    entered = update.message.text.strip()
+    if entered == BOT_PASSWORD:
+        # Успешно
+        await update.message.reply_text(
+            "Пароль верный.\nВыберите тип топлива для заполнения анализов:",
+            reply_markup=ReplyKeyboardMarkup(fuel_keyboard, one_time_keyboard=True, resize_keyboard=True),
+        )
+        return CHOOSE_FUEL
+    else:
+        # Неверный пароль
+        await update.message.reply_text("Неверный пароль. Попробуйте ещё раз:")
+        return PASSWORD
 
 
 # --- MDO flow ---
 
 async def choose_mdo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Пользователь нажал [MDO] → сразу сохраняем FUEL="LSMGO DMA" и спрашиваем NAME.
-    """
     context.user_data.clear()
     context.user_data["FUEL"] = "LSMGO DMA"
     await update.message.reply_text("Введите Название судна:")
@@ -329,7 +347,6 @@ async def mdo_carbon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def mdo_sulph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Получаем значение SULPH от пользователя
     context.user_data["SULPH"] = update.message.text.strip().upper()
     # Случайные значения для ASH и CETANE
     context.user_data["ASH"] = f"{random.uniform(0.001, 0.011):.3f}"
@@ -387,9 +404,6 @@ async def mdo_sulph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # --- HFO flow ---
 
 async def choose_hfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Пользователь нажал [HFO]. Спрашиваем тип HFO.
-    """
     context.user_data.clear()
     await update.message.reply_text(
         "Выберите тип HFO:",
@@ -401,7 +415,7 @@ async def choose_hfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def hfo_choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     choice = update.message.text.strip().upper()
     if choice not in ("LSFO RMG-180", "LSFO RMG-380"):
-        await update.message.reply_text("Нужно выбрать «LSFO RMG-180» или «LSFO RMG-360».")
+        await update.message.reply_text("Нужно выбрать «LSFO RMG-180» или «LSFO RMG-380».")
         return HFO_CHOOSE_TYPE
 
     context.user_data["FUEL"] = choice
@@ -511,7 +525,6 @@ async def hfo_carbon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def hfo_sulph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Получаем значение SULPH от пользователя
     context.user_data["SULPH"] = update.message.text.strip().upper()
     # Случайные значения для VANAD и SEDIM
     context.user_data["VANAD"] = str(random.randint(220, 300))
@@ -600,16 +613,17 @@ async def ask_again(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ASK_AGAIN
 
 
-
 # === MAIN ===
 def main():
-    # Замените "ВАШ_ТОКЕН" на токен вашего бота
-    BOT_TOKEN = "7529252367:AAGQsPyVB88UXCJK9RJwJ1xL8xtmRcYFSSw"
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # ConversationHandler с учётом нового шага PASSWORD
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
+            PASSWORD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, check_password)
+            ],
             CHOOSE_FUEL: [
                 MessageHandler(filters.Regex("^MDO$"), choose_mdo),
                 MessageHandler(filters.Regex("^HFO$"), choose_hfo),
@@ -645,6 +659,8 @@ def main():
             HFO_POUR:          [MessageHandler(filters.TEXT & ~filters.COMMAND, hfo_pour)],
             HFO_CARBON:        [MessageHandler(filters.TEXT & ~filters.COMMAND, hfo_carbon)],
             HFO_SULPH:         [MessageHandler(filters.TEXT & ~filters.COMMAND, hfo_sulph)],
+
+            # --- после создания PDF ---
             ASK_AGAIN:         [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_again)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
