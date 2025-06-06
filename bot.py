@@ -322,7 +322,7 @@ async def mdo_visc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def mdo_flash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["FLASH"] = update.message.text.strip().upper()
-    await update.message.reply_text("Введите POUR (Pour point) из БДН, погрешность ±несколько единиц):")
+    await update.message.reply_text("Введите POUR (Pour point) из БДН (значени от -25 до -10):")
     return MDO_POUR
 
 
@@ -337,7 +337,7 @@ async def mdo_pour(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Нужно число, пример: 10.5")
         return MDO_POUR
 
-    await update.message.reply_text("Введите CARBON (из БДН, погрешность ±несколько единиц):")
+    await update.message.reply_text("Введите CARBON (значение от 0.10 до 0.20, после точки 2 знака):")
     return MDO_CARBON
 
 
@@ -501,7 +501,7 @@ async def hfo_visc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def hfo_flash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["FLASH"] = update.message.text.strip().upper()
-    await update.message.reply_text("Введите POUR (Pour point) из БДН, погрешность ±несколько единиц):")
+    await update.message.reply_text("Введите POUR (Pour point) (выбери любое значение между 6 и 15)):")
     return HFO_POUR
 
 
@@ -514,7 +514,7 @@ async def hfo_pour(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Нужно число, пример 10.5")
         return HFO_POUR
 
-    await update.message.reply_text("Введите CARBON (из БДН, погрешность ±несколько единиц):")
+    await update.message.reply_text("Введите CARBON (любое значение между 2.00 и 4.00, 2 знака после точки):")
     return HFO_CARBON
 
 
