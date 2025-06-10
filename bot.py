@@ -75,9 +75,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     HFO_POUR,           # 26
     HFO_CARBON,         # 27
     HFO_SULPH,          # 28
-
-    ASK_AGAIN           # 29
-) = range(30)
+    ASK_AGAIN,
+    MDO_CHOOSE_TYPE          # 29
+) = range(31)
 
 
 # === Клавиатуры ===
@@ -85,6 +85,7 @@ fuel_keyboard = [[KeyboardButton("HFO"), KeyboardButton("MDO")]]
 again_keyboard = [
     [KeyboardButton("Сделать ещё один PDF"), KeyboardButton("Завершить работу")]]
 hfo_type_keyboard = [[KeyboardButton("LSFO RMG-180"), KeyboardButton("LSFO RMG-380")]]
+mdo_type_keyboard = [[KeyboardButton("LSMGO DMA"), KeyboardButton("ULSFO")]]
 
 
 # === Функция подстановки значений в Word (python-docx) и конвертации в PDF (docx2pdf) ===
@@ -240,7 +241,18 @@ async def check_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def choose_mdo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    context.user_data["FUEL"] = "LSMGO DMA"
+    await update.message.reply_text(
+        "Выберите тип MDO или ULSFO:",
+        reply_markup=ReplyKeyboardMarkup(mdo_type_keyboard, one_time_keyboard=True, resize_keyboard=True),
+    )
+    return MDO_CHOOSE_TYPE
+
+async def MDO_choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    choice = update.message.text.strip().upper()
+    if choice not in ("LSMGO DMA", "ULSFO"):
+        await update.message.reply_text("Нужно выбрать «LSMGO DMA» или «ULSFO».")
+        return MDO_CHOOSE_TYPE
+    context.user_data["FUEL"] = choice
     await update.message.reply_text("Введите Название судна:")
     return MDO_NAME
 
