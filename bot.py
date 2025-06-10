@@ -643,6 +643,7 @@ def main():
             ],
 
             # --- MDO flow ---
+            MDO_CHOOSE_TYPE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, mdo_choose_type)],
             MDO_NAME:          [MessageHandler(filters.TEXT & ~filters.COMMAND, mdo_name)],
             MDO_DATE:          [MessageHandler(filters.TEXT & ~filters.COMMAND, mdo_date)],
             MDO_DATE_RECEIVED: [MessageHandler(filters.TEXT & ~filters.COMMAND, mdo_date_received)],
