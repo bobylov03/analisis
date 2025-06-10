@@ -247,7 +247,7 @@ async def choose_mdo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return MDO_CHOOSE_TYPE
 
-async def MDO_choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def mdo_choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     choice = update.message.text.strip().upper()
     if choice not in ("LSMGO DMA", "ULSFO"):
         await update.message.reply_text("Нужно выбрать «LSMGO DMA» или «ULSFO».")
